@@ -1,0 +1,291 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:batch="http://www.mulesoft.org/schema/mule/batch"
+	xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
+http://www.mulesoft.org/schema/mule/batch http://www.mulesoft.org/schema/mule/batch/current/mule-batch.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd">
+	
+	<flow name="input-data-flow" doc:id="060cf0b4-a24f-4cf5-9270-3b020e1bdc50" >
+		<http:listener doc:name="Listener" doc:id="273e400a-fadd-4cdc-bcd5-efb69d207953" path="/test" config-ref="HTTP_Listener_config"/>
+		<logger level="INFO" doc:name="Logger" doc:id="528c7cab-7bec-4af2-a419-d361cbdc1140" />
+		<ee:transform doc:name="Incoming User Information / Original Payload" doc:id="a0e3b1ed-914a-4380-bc7e-1a95519070be" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+---
+[{
+	"First Name":"Anne",
+	"Last Name":"Smith",
+	"email":"anne@email.com",
+	"Company":"ACME INC",
+	id:"1821dd44"
+},
+{
+	"First Name":"Michael",
+	"Last Name":"Stevens",
+	"email":"michael@email.com",
+	"Company":"TESLA",
+	id:"1821dd45"
+},
+{
+	"First Name":"Carlos",
+	"Last Name":"Perez",
+	"email":"carlos@email.com",
+	"Company":"Salesforce",
+	id:"1821dd46"
+}]]]></ee:set-payload>
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="originalPayload" ><![CDATA[%dw 2.0
+output application/java
+---
+[{
+	"First Name":"Anne",
+	"Last Name":"Smith",
+	"email":"anne@email.com",
+	"Company":"ACME INC",
+	id:"1821dd44"
+},
+{
+	"First Name":"Michael",
+	"Last Name":"Stevens",
+	"email":"michael@email.com",
+	"Company":"TESLA",
+	id:"1821dd45"
+},
+{
+	"First Name":"Carlos",
+	"Last Name":"Perez",
+	"email":"carlos@email.com",
+	"Company":"Salesforce",
+	id:"1821dd46"
+}]]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<ee:transform doc:name="Preparing Search Request" doc:id="27f54e84-9d11-4e94-ba06-2b2d40cffe29" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+---
+(payload map {
+  ids: "\"" ++ ($.id) ++ "\"" 
+}.ids) joinBy " OR "]]></ee:set-payload>
+			</ee:message>
+			<ee:variables >
+			</ee:variables>
+		</ee:transform>
+		<flow-ref doc:name="salesforce-search-flow" doc:id="b2804100-816b-451b-95e6-19f56c8ad4c9" name="salesforce-search-flow"/>
+	</flow>
+	<flow name="salesforce-search-flow" doc:id="7adf456d-b418-455c-94e3-40ce956215ea" >
+		<salesforce:search doc:name="Search" doc:id="a30233a5-22e7-4a32-9915-e13d2bf599d8" config-ref="Salesforce_Config">
+			<salesforce:search-string ><![CDATA[FIND { :ids } IN ALL FIELDS RETURNING Contact(Id,external_id__c,Email), Lead(Id,external_id__c,email)]]></salesforce:search-string>
+		</salesforce:search>
+		<ee:transform doc:name="MApping Search Response" doc:id="f9ad5b7c-bbfe-4d1b-bbf2-5a2f5115b42a" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+---
+payload.searchRecords map {
+	($.record)
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<ee:transform doc:name="Group By Type" doc:id="dfd1f121-e257-4b90-8792-1ac9063d8636" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+---
+(payload groupBy ((value, index) -> value."type"))]]></ee:set-payload>
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="salesforceResponseMap" ><![CDATA[%dw 2.0
+output application/java
+---
+{
+  (payload map {
+    (($.external_id__c):$) if $.Id != null 
+  })
+}]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<ee:transform doc:name="Collect by type" doc:id="9533ed50-1ff9-4832-a732-d2cee4c84b72" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+---
+{
+  fromContacts: payload.Contact map (salesforceContact, IndexOfContact)->{
+    (id: salesforceContact.external_id__c) if (salesforceContact.external_id__c != null),
+  },
+  fromLeads: payload.Lead map (salesforceLead, indexOfLeads)->{
+    (id: salesforceLead.external_id__c) if (salesforceLead.external_id__c != null),
+  }
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<flow-ref doc:name="filter-and-collecting-records" doc:id="56cf8a04-79c8-4bf7-a198-5f99d494a76f" name="filter-and-collecting-records"/>
+	</flow>
+	<flow name="filter-and-collecting-records" doc:id="4931e563-f2f3-4795-a37c-fec3664bf7e0" >
+		<ee:transform doc:name="Filter Contacts / Update Contact" doc:id="75f5b08a-d3bb-460f-baa8-63ebe287350c" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+---
+vars.originalPayload filter (not (vars.groupedObjects.fromContacts.id contains ($.id)))]]></ee:set-payload>
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="contactsToUpdate" ><![CDATA[%dw 2.0
+output application/java
+---
+(vars.originalPayload filter ((vars.groupedObjects.fromContacts.id contains ($.id))) map (contact, indexOfContact) -> {
+  Id: vars.salesforceResponseMap[contact.id].Id,
+  FirstName: contact."First Name"
+})]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<ee:transform doc:name="Filter Leads / Update Leads" doc:id="65feb641-754f-4800-bf17-22d1469fcf81" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+---
+payload filter (not (vars.groupedObjects.fromLeads.id contains ($.id)))]]></ee:set-payload>
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="leadsToUpdate" ><![CDATA[%dw 2.0
+output application/java
+---
+vars.originalPayload filter ((vars.groupedObjects.fromLeads.id contains ($.id))) map (lead,indexOfLead) -> {
+	Id:vars.salesforceResponseMap[lead.id].Id,
+	FirstName:lead."First Name"
+}]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<ee:transform doc:name="Mapping Leads that need creation" doc:id="e5ce8836-e906-451b-8861-3884a00deea7" >
+			<ee:message >
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="leadsToCreate" ><![CDATA[output application/java
+---
+payload map (lead,indexOfLead)->{
+	FirstName:lead."First Name",
+	LastName: lead."Last Name",
+	email:lead."email",
+	Company:lead."Company",
+	external_id__c:lead.id
+}]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<flow-ref doc:name="enqueue-batch-jobs" doc:id="94acd588-e389-4b79-bf36-db47ba061d6f" name="enqueue-batch-jobs"/>
+	</flow>
+	<flow name="enqueue-batch-jobs" doc:id="a5e2b477-81dc-4f43-be1a-53caa5ca310f" >
+		<ee:transform doc:name="Contacts to Update" doc:id="83a04736-bd3d-4615-aae2-4e1906329f1c" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+---
+vars.contactsToUpdate]]></ee:set-payload>
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="sObject" ><![CDATA[%dw 2.0
+output application/java
+---
+"Contact"]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<flow-ref doc:name="update-salesforce-records-batch" doc:id="f1097741-1bbe-4a90-8083-dc7986339efd" name="update-salesforce-records-batch"/>
+		<ee:transform doc:name="Leads to Update" doc:id="d20f6f52-b3c0-46b4-bf85-3207957da46b" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+---
+vars.leadsToUpdate]]></ee:set-payload>
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="sObject" ><![CDATA[%dw 2.0
+output application/java
+---
+"Lead"]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<flow-ref doc:name="Flow Reference" doc:id="848c23fa-8d71-467d-ac4d-d01470caad7b" name="update-salesforce-records-batch"/>
+		<ee:transform doc:name="Leads To Create" doc:id="f6af6888-bb98-47bc-8ea4-1aa612d7227b" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+---
+vars.leadsToCreate]]></ee:set-payload>
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="sObject" ><![CDATA[%dw 2.0
+output application/java
+---
+"Lead"]]></ee:set-variable>
+				<ee:set-variable variableName="externalId" ><![CDATA[%dw 2.0
+output application/java
+---
+"external_id__c"]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<flow-ref doc:name="upsert-salesforce-records-batch" doc:id="a04dd8a5-9529-48f7-a74e-3dbf07171eba" name="upsert-salesforce-records-batch"/>
+	</flow>
+	<flow name="update-salesforce-records-batch" doc:id="96b3ea5f-cbba-450a-89ad-7b3de19f9714" >
+		<batch:job jobName="salesforce-searchBatch_Job" doc:id="a7ba58c9-3b13-4f87-a213-f3198364f244" >
+			<batch:process-records >
+				<batch:step name="Batch_Step" doc:id="5139042d-ea99-4661-a75d-21f33c732c15" >
+					<batch:aggregator doc:name="Batch Aggregator" doc:id="74526ae8-ad10-4fb1-9bac-e8d685572017" size="200">
+						<salesforce:update doc:name="Update" doc:id="ea86ee02-af60-4ab6-b34d-c5ac9f5c3bca" config-ref="Salesforce_Config" type="vars.sObject"/>
+						<ee:transform doc:name="Mapping Salesforce Response" doc:id="bae94794-83b4-4dd0-b51e-6c11861eefd1" >
+							<ee:message >
+								<ee:set-payload ><![CDATA[output application/json
+---
+payload.items map {
+    id:$.id,
+    success:$.successful,
+    (field:$.errors[0].fields[0]) if $.successful == false,  
+    (message:$.errors[0].message) if $.successful == false,
+    (statusCode:$.errors[0].statusCode) if $.successful == false
+}]]></ee:set-payload>
+							</ee:message>
+						</ee:transform>
+						<logger level="INFO" doc:name="Logger" doc:id="e7f2b3df-6570-4be2-a30e-c1e9863081e3" message="#[payload]"/>
+					</batch:aggregator>
+				</batch:step>
+			</batch:process-records>
+			<batch:on-complete >
+				<logger level="INFO" doc:name="Logger" doc:id="8af23a09-2872-449a-9005-8e4f7b61c985" message="#[payload]"/>
+			</batch:on-complete>
+		</batch:job>
+	</flow>
+	<flow name="upsert-salesforce-records-batch" doc:id="4dc9e727-ee8d-42e0-b45d-f557a23f4ff1" >
+		<batch:job jobName="salesforce-searchBatch_Job1" doc:id="9acf4fe9-97bb-40b1-a369-3b49c473b76e" >
+			<batch:process-records >
+				<batch:step name="Batch_Step1" doc:id="4cbe4ef9-7260-45be-b76c-80574713184a" >
+					<batch:aggregator doc:name="Batch Aggregator" doc:id="218c433f-76bb-4405-9eb1-2f007c620a4d" size="200">
+						<salesforce:upsert doc:name="Upsert" doc:id="e1898afc-e829-453d-9a66-8f8a0d0333c8" config-ref="Salesforce_Config" objectType="vars.sObject" externalIdFieldName="vars.externalId"/>
+						<ee:transform doc:name="Transform Message" doc:id="553ad76d-b336-412b-89bd-48056e66dfc2" >
+							<ee:message >
+								<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+payload.items map {
+    id:$.id,
+    success:$.successful,
+    (field:$.errors[0].fields[0]) if $.successful == false,  
+    (message:$.errors[0].message) if $.successful == false,
+    (statusCode:$.errors[0].statusCode) if $.successful == false
+}]]></ee:set-payload>
+							</ee:message>
+						</ee:transform>
+						<logger level="INFO" doc:name="Logger" doc:id="4b5bb7f2-4966-473e-84a3-75f43f4d0099" message="#[payload]"/>
+					</batch:aggregator>
+				</batch:step>
+			</batch:process-records>
+			<batch:on-complete >
+				<logger level="INFO" doc:name="Logger" doc:id="87291957-b902-45f4-ba63-4598213f625e" message="#[payload]"/>
+			</batch:on-complete>
+		</batch:job>
+	</flow>
+</mule>
